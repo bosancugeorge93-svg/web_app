@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Budget Planner</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Chart.js for interactive graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- React & ReactDOM for application logic -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    
+    <!-- Babel to compile React JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind Configuration for Custom Turquoise Theme -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        turquoise: {
+                            50: '#f0fdfa',
+                            100: '#ccfbf1',
+                            200: '#99f6e4',
+                            300: '#5eead4',
+                            400: '#2dd4bf',
+                            500: '#14b8a6', // Base Turquoise
+                            600: '#0d9488', // Darker Turquoise for buttons
+                            700: '#0f766e',
+                            800: '#115e59',
+                            900: '#134e4a',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { 
+            background-color: #f0fdfa; /* Light turquoise tint background */
+            color: #334155;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #2dd4bf; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #0d9488; }
+        
+        /* Hide number input arrows */
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Utility Functions ---
+        const formatMoney = (amount) => {
+            return new Intl.NumberFormat('ro-RO', { 
+                style: 'currency', 
+                currency: 'RON',
+                maximumFractionDigits: 0
+            }).format(amount);
+        };
+
+        const formatEuro = (amount) => {
+            return new Intl.NumberFormat('ro-RO', { 
+                style: 'currency', 
+                currency: 'EUR',
+                maximumFractionDigits: 2
+            }).format(amount);
+        };
+
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+
+        // --- Reusable Chart Component ---
+        const ChartComponent = ({ type, data, options }) => {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+                
+                const ctx = chartRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: type,
+                    data: data,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        ...options
+                    }
+                });
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data, type, options]);
+
+            return <canvas ref={chartRef} />;
+        };
+
+        // --- Main Application Component ---
+        const App = () => {
+            // State initialization (with localStorage persistence)
+            const loadData = (key, defaultData) => {
+                try {
+                    const saved = localStorage.getItem(key);
+                    return saved ? JSON.parse(saved) : defaultData;
+                } catch (e) {
+                    return defaultData;
+                }
+            };
+
+            const [incomes, setIncomes] = useState(() => loadData('fmcm_incomes', []));
+            const [expenses, setExpenses] = useState(() => loadData('fmcm_expenses', []));
+            const [savingsGoal, setSavingsGoal] = useState(() => loadData('fmcm_goal', 2000));
+            
+            // New States for Savings and Investments (EUR)
+            const [savingsEntries, setSavingsEntries] = useState(() => loadData('fmcm_savings', []));
+            const [investmentEntries, setInvestmentEntries] = useState(() => loadData('fmcm_investments', []));
+
+            const [activeTab, setActiveTab] = useState('dashboard');
+
+            // --- Toast Notification & Settings State ---
+            const [toast, setToast] = useState(null);
+            const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+            const showNotification = (message, type = 'success') => {
+                setToast({ message, type });
+                setTimeout(() => setToast(null), 3000);
+            };
+
+            // Save to local storage whenever data changes
+            useEffect(() => {
+                try {
+                    localStorage.setItem('fmcm_incomes', JSON.stringify(incomes));
+                    localStorage.setItem('fmcm_expenses', JSON.stringify(expenses));
+                    localStorage.setItem('fmcm_goal', JSON.stringify(savingsGoal));
+                    localStorage.setItem('fmcm_savings', JSON.stringify(savingsEntries));
+                    localStorage.setItem('fmcm_investments', JSON.stringify(investmentEntries));
+                } catch (e) {
+                    console.warn("Could not save to localStorage");
+                }
+            }, [incomes, expenses, savingsGoal, savingsEntries, investmentEntries]);
+
+            // Calculated Values - Monthly (RON)
+            const totalIncome = incomes.reduce((acc, curr) => acc + Number(curr.amount), 0);
+            const totalExpenses = expenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
+            const savedAmount = totalIncome - totalExpenses;
+            const savingsRate = totalIncome > 0 ? ((savedAmount / totalIncome) * 100).toFixed(1) : 0;
+            const goalProgress = savingsGoal > 0 ? Math.min((savedAmount / savingsGoal) * 100, 100).toFixed(1) : 0;
+
+            // Calculated Values - History (EUR)
+            const totalSavingsEur = savingsEntries.reduce((acc, curr) => acc + Number(curr.amount), 0);
+            const totalInvestmentsEur = investmentEntries.reduce((acc, curr) => acc + Number(curr.amount), 0);
+
+            // --- Handlers ---
+            const addIncome = (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const newIncome = {
+                    id: generateId(),
+                    source: formData.get('source'),
+                    amount: Number(formData.get('amount')),
+                    category: formData.get('category'),
+                    type: formData.get('type')
+                };
+                setIncomes([...incomes, newIncome]);
+                showNotification('Venit adăugat cu succes!');
+                e.target.reset();
+            };
+
+            const deleteIncome = (id) => {
+                setIncomes(incomes.filter(i => i.id !== id));
+                showNotification('Venit șters.');
+            };
+
+            const addExpense = (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const newExpense = {
+                    id: generateId(),
+                    name: formData.get('name'),
+                    amount: Number(formData.get('amount')),
+                    category: formData.get('category'),
+                    method: formData.get('method'),
+                    dueDate: formData.get('dueDate'),
+                    reminder: formData.get('reminder') === 'on'
+                };
+                setExpenses([...expenses, newExpense]);
+                showNotification('Cheltuială adăugată cu succes!');
+                e.target.reset();
+            };
+
+            const deleteExpense = (id) => {
+                setExpenses(expenses.filter(e => e.id !== id));
+                showNotification('Cheltuială ștearsă.');
+            };
+
+            // Handlers for Savings (EUR)
+            const addSavings = (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const newSaving = {
+                    id: generateId(),
+                    date: formData.get('date'),
+                    note: formData.get('note'),
+                    amount: Number(formData.get('amount'))
+                };
+                setSavingsEntries([...savingsEntries, newSaving]);
+                showNotification('Economie adăugată cu succes!');
+                e.target.reset();
+            };
+
+            const deleteSavings = (id) => {
+                setSavingsEntries(savingsEntries.filter(s => s.id !== id));
+                showNotification('Înregistrare ștearsă.');
+            };
+
+            // Handlers for Investments (EUR)
+            const addInvestment = (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const newInv = {
+                    id: generateId(),
+                    date: formData.get('date'),
+                    name: formData.get('name'),
+                    type: formData.get('type'),
+                    amount: Number(formData.get('amount'))
+                };
+                setInvestmentEntries([...investmentEntries, newInv]);
+                showNotification('Investiție adăugată cu succes!');
+                e.target.reset();
+            };
+
+            const deleteInvestment = (id) => {
+                setInvestmentEntries(investmentEntries.filter(i => i.id !== id));
+                showNotification('Investiție ștearsă.');
+            };
+
+            // --- Chart Data Generators ---
+            const getExpenseCategoryData = () => {
+                const categories = {};
+                expenses.forEach(e => {
+                    categories[e.category] = (categories[e.category] || 0) + e.amount;
+                });
+                return {
+                    labels: Object.keys(categories),
+                    datasets: [{
+                        data: Object.values(categories),
+                        // Expanded color palette for the new extra categories
+                        backgroundColor: [
+                            '#14b8a6', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', 
+                            '#64748b', '#ec4899', '#10b981', '#f43f5e', '#84cc16', 
+                            '#06b6d4', '#d946ef'
+                        ],
+                        borderWidth: 0
+                    }]
+                };
+            };
+
+            const getOverviewChartData = () => {
+                return {
+                    labels: ['Bilanț Lunar (RON)'],
+                    datasets: [
+                        { label: 'Venituri', data: [totalIncome], backgroundColor: '#14b8a6' },
+                        { label: 'Cheltuieli', data: [totalExpenses], backgroundColor: '#ef4444' },
+                        { label: 'Rămas', data: [savedAmount > 0 ? savedAmount : 0], backgroundColor: '#3b82f6' }
+                    ]
+                };
+            };
+
+            const getSavingsTimelineData = () => {
+                const sorted = [...savingsEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
+                let acc = 0;
+                const labels = [];
+                const data = [];
+                
+                sorted.forEach(entry => {
+                    acc += Number(entry.amount);
+                    labels.push(entry.date);
+                    data.push(acc);
+                });
+
+                return {
+                    labels: labels.length > 0 ? labels : ['Nicio dată'],
+                    datasets: [{
+                        label: 'Total Economii (EUR)',
+                        data: data.length > 0 ? data : [0],
+                        borderColor: '#0ea5e9',
+                        backgroundColor: 'rgba(14, 165, 233, 0.2)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 4,
+                        pointHoverRadius: 6
+                    }]
+                };
+            };
+
+            const getInvestmentTypeData = () => {
+                const types = {};
+                investmentEntries.forEach(e => {
+                    types[e.type] = (types[e.type] || 0) + e.amount;
+                });
+                
+                if (Object.keys(types).length === 0) {
+                     return { labels: ['Fără date'], datasets: [{ data: [1], backgroundColor: ['#e2e8f0'] }] };
+                }
+
+                return {
+                    labels: Object.keys(types),
+                    datasets: [{
+                        data: Object.values(types),
+                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b'],
+                        borderWidth: 0
+                    }]
+                };
+            };
+
+            const getInvestmentTimelineData = () => {
+                const sorted = [...investmentEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
+                let acc = 0;
+                const labels = [];
+                const data = [];
+                
+                sorted.forEach(entry => {
+                    acc += Number(entry.amount);
+                    labels.push(entry.date);
+                    data.push(acc);
+                });
+
+                return {
+                    labels: labels.length > 0 ? labels : ['Nicio dată'],
+                    datasets: [{
+                        label: 'Total Investit (EUR)',
+                        data: data.length > 0 ? data : [0],
+                        borderColor: '#8b5cf6',
+                        backgroundColor: 'rgba(139, 92, 246, 0.2)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 4
+                    }]
+                };
+            };
+
+            // --- Views ---
+            const DashboardView = () => {
+                // --- Upcoming Bills Logic ---
+                const currentDay = new Date().getDate();
+                const upcomingBills = expenses
+                    .filter(exp => exp.dueDate)
+                    .map(exp => {
+                        let diff = parseInt(exp.dueDate) - currentDay;
+                        if (diff < 0) diff += 30; // Approx month wrap
+                        return { ...exp, daysUntil: diff };
+                    })
+                    .filter(exp => exp.daysUntil >= 0 && exp.daysUntil <= 7)
+                    .sort((a, b) => a.daysUntil - b.daysUntil);
+
+                return (
+                    <div className="space-y-6 animate-fade-in">
+                        {/* Top Summary Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-turquoise-100 flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm text-gray-500 font-medium mb-1">Total Venituri</p>
+                                    <h3 className="text-2xl font-bold text-gray-800">{formatMoney(totalIncome)}</h3>
+                                </div>
+                                <div className="h-12 w-12 rounded-full bg-turquoise-100 text-turquoise-600 flex items-center justify-center text-xl">
+                                    <i className="fa-solid fa-arrow-down"></i>
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-red-100 flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm text-gray-500 font-medium mb-1">Total Cheltuieli</p>
+                                    <h3 className="text-2xl font-bold text-gray-800">{formatMoney(totalExpenses)}</h3>
+                                </div>
+                                <div className="h-12 w-12 rounded-full bg-red-100 text-red-500 flex items-center justify-center text-xl">
+                                    <i className="fa-solid fa-arrow-up"></i>
+                                </div>
+                            </div>
+                            <div className="bg-turquoise-600 rounded-2xl p-6 shadow-md text-white flex items-center justify-between">
+                                <div>
+                                    <p className="text-sm text-turquoise-100 font-medium mb-1">Rată Economisire</p>
+                                    <h3 className="text-3xl font-bold">{savingsRate}%</h3>
+                                    <p className="text-sm mt-1">{formatMoney(savedAmount)} rămași</p>
+                                </div>
+                                <div className="h-12 w-12 rounded-full bg-white/20 flex items-center justify-center text-xl">
+                                    <i className="fa-solid fa-piggy-bank"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Savings Goal Section */}
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <div className="flex flex-col md:flex-row justify-between items-center mb-4">
+                                <div>
+                                    <h3 className="text-lg font-bold text-gray-800">Obiectiv Lunar de Economisire</h3>
+                                    <p className="text-sm text-gray-500">Urmărește progresul obiectivului tău lunar</p>
+                                </div>
+                                <div className="mt-4 md:mt-0 flex items-center gap-2">
+                                    <span className="text-sm text-gray-500">Țintă:</span>
+                                    <input 
+                                        type="number" 
+                                        value={savingsGoal}
+                                        onChange={(e) => setSavingsGoal(Number(e.target.value))}
+                                        className="border border-gray-300 rounded-lg px-3 py-1 w-32 focus:outline-none focus:ring-2 focus:ring-turquoise-500 font-semibold"
+                                    />
+                                    <span className="text-sm text-gray-500">RON</span>
+                                </div>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-4 mb-2 overflow-hidden">
+                                <div className="bg-turquoise-500 h-4 rounded-full transition-all duration-1000" style={{ width: `${goalProgress}%` }}></div>
+                            </div>
+                            <p className="text-sm text-right font-medium text-gray-600">{goalProgress}% Atins</p>
+                        </div>
+
+                        {/* Upcoming Bills Section */}
+                        {upcomingBills.length > 0 && (
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-amber-100 bg-amber-50/30">
+                                <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center text-amber-600">
+                                    <i className="fa-solid fa-clock mr-2"></i> Facturi Scadente (Următoarele 7 Zile)
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {upcomingBills.map(bill => (
+                                        <div key={bill.id} className="bg-white border border-amber-200 rounded-xl p-4 flex justify-between items-center shadow-sm">
+                                            <div>
+                                                <p className="font-semibold text-gray-800">{bill.name}</p>
+                                                <p className="text-xs text-amber-600 font-medium mt-1">
+                                                    {bill.daysUntil === 0 ? 'Scadent Azi' : `Scadent în ${bill.daysUntil} zi${bill.daysUntil > 1 ? 'le' : ''}`} (Ziua {bill.dueDate})
+                                                </p>
+                                            </div>
+                                            <div className="font-bold text-red-500">
+                                                {formatMoney(bill.amount)}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Charts Section */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                                <h3 className="text-lg font-bold text-gray-800 mb-4">Bilanț Lunar</h3>
+                                <div className="h-64 relative w-full">
+                                    <ChartComponent 
+                                        type="bar" 
+                                        data={getOverviewChartData()} 
+                                        options={{ plugins: { legend: { position: 'bottom' } } }} 
+                                    />
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                                <h3 className="text-lg font-bold text-gray-800 mb-4">Cheltuieli pe Categorie</h3>
+                                <div className="h-64 relative w-full">
+                                    {expenses.length > 0 ? (
+                                        <ChartComponent 
+                                            type="doughnut" 
+                                            data={getExpenseCategoryData()} 
+                                            options={{ plugins: { legend: { position: 'right' } }, cutout: '70%' }} 
+                                        />
+                                    ) : (
+                                        <div className="flex items-center justify-center h-full text-gray-400">
+                                            Nu există cheltuieli încă.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const IncomeView = () => (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 sticky top-6">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4">Adaugă Venit Nou (RON)</h3>
+                            <form onSubmit={addIncome} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Sursa</label>
+                                    <input required name="source" type="text" placeholder="ex: Salariu principal" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Sumă (RON)</label>
+                                    <input required name="amount" type="number" min="0" step="1" placeholder="0" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Categorie</label>
+                                    <select name="category" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500 bg-white">
+                                        <option value="Salariu">Salariu</option>
+                                        <option value="Afacere">Afacere</option>
+                                        <option value="Investiții">Investiții</option>
+                                        <option value="Altele">Altele</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Tip Venit</label>
+                                    <div className="flex gap-4 mt-2">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input type="radio" name="type" value="Principal" defaultChecked className="text-turquoise-600 focus:ring-turquoise-500" />
+                                            <span className="text-sm">Principal</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input type="radio" name="type" value="Secundar" className="text-turquoise-600 focus:ring-turquoise-500" />
+                                            <span className="text-sm">Secundar</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <button type="submit" className="w-full bg-turquoise-600 hover:bg-turquoise-700 text-white font-semibold py-2.5 rounded-lg transition-colors duration-200 mt-2">
+                                    <i className="fa-solid fa-plus mr-2"></i> Salvează Venit
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    <div className="lg:col-span-2">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex justify-between items-center">
+                                Surse de Venit
+                                <span className="bg-turquoise-100 text-turquoise-700 py-1 px-3 rounded-full text-sm">{formatMoney(totalIncome)} Total</span>
+                            </h3>
+                            {incomes.length === 0 ? (
+                                <div className="text-center py-10 text-gray-500">Nu ai adăugat surse de venit.</div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-gray-200 text-gray-500 text-sm">
+                                                <th className="pb-3 font-medium">Sursă</th>
+                                                <th className="pb-3 font-medium">Categorie</th>
+                                                <th className="pb-3 font-medium">Tip</th>
+                                                <th className="pb-3 font-medium text-right">Sumă</th>
+                                                <th className="pb-3 font-medium text-center">Acțiune</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {incomes.map(inc => (
+                                                <tr key={inc.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                                                    <td className="py-4 font-medium text-gray-800">{inc.source}</td>
+                                                    <td className="py-4 text-sm text-gray-600">{inc.category}</td>
+                                                    <td className="py-4">
+                                                        <span className={`text-xs px-2 py-1 rounded-md ${inc.type === 'Principal' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                            {inc.type}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-4 text-right font-semibold text-turquoise-600">{formatMoney(inc.amount)}</td>
+                                                    <td className="py-4 text-center">
+                                                        <button onClick={() => deleteIncome(inc.id)} className="text-red-400 hover:text-red-600 transition-colors">
+                                                            <i className="fa-regular fa-trash-can"></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const ExpenseView = () => (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 sticky top-6">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4">Adaugă Cheltuială (RON)</h3>
+                            <form onSubmit={addExpense} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Nume Cheltuială</label>
+                                    <input required name="name" type="text" placeholder="ex: Factură Curent" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Sumă (RON)</label>
+                                    <input required name="amount" type="number" min="0" step="1" placeholder="0" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Categorie</label>
+                                        <select name="category" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500 bg-white text-sm">
+                                            <option value="Rata Casa">Rata Casa</option>
+                                            <option value="Locuință">Locuință</option>
+                                            <option value="Utilități">Utilități</option>
+                                            <option value="Food">Food</option>
+                                            <option value="Baby">Baby</option>
+                                            <option value="Education">Education</option>
+                                            <option value="Milostenie">Milostenie</option>
+                                            <option value="Transport">Transport</option>
+                                            <option value="Beauty">Beauty</option>
+                                            <option value="Health">Health</option>
+                                            <option value="Divertisment">Divertisment</option>
+                                            <option value="Others">Others</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Metodă</label>
+                                        <select name="method" className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500 bg-white text-sm">
+                                            <option value="Card">Card</option>
+                                            <option value="Cash">Cash</option>
+                                            <option value="Transfer">Transfer</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Ziua Scadenței</label>
+                                    <input name="dueDate" type="number" min="1" max="31" placeholder="ex: 15" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-turquoise-500" />
+                                </div>
+                                <div className="flex items-center mt-2">
+                                    <input type="checkbox" id="reminder" name="reminder" className="w-4 h-4 text-turquoise-600 rounded border-gray-300 focus:ring-turquoise-500" />
+                                    <label htmlFor="reminder" className="ml-2 text-sm text-gray-700">Setează reminder lunar</label>
+                                </div>
+                                <button type="submit" className="w-full bg-turquoise-600 hover:bg-turquoise-700 text-white font-semibold py-2.5 rounded-lg transition-colors duration-200 mt-4">
+                                    <i className="fa-solid fa-plus mr-2"></i> Salvează Cheltuială
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    <div className="lg:col-span-2">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex justify-between items-center">
+                                Cheltuieli Lunare
+                                <span className="bg-red-50 text-red-600 py-1 px-3 rounded-full text-sm font-medium">{formatMoney(totalExpenses)} Total</span>
+                            </h3>
+                            {expenses.length === 0 ? (
+                                <div className="text-center py-10 text-gray-500">Nu ai adăugat nicio cheltuială.</div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-gray-200 text-gray-500 text-sm">
+                                                <th className="pb-3 font-medium">Cheltuială</th>
+                                                <th className="pb-3 font-medium">Categorie</th>
+                                                <th className="pb-3 font-medium">Scadență</th>
+                                                <th className="pb-3 font-medium text-right">Sumă</th>
+                                                <th className="pb-3 font-medium text-center">Acțiune</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {expenses.map(exp => (
+                                                <tr key={exp.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                                                    <td className="py-4">
+                                                        <p className="font-medium text-gray-800 flex items-center gap-2">
+                                                            {exp.name}
+                                                            {exp.reminder && <i className="fa-solid fa-bell text-amber-400 text-xs" title="Reminder Activ"></i>}
+                                                        </p>
+                                                        <p className="text-xs text-gray-400">{exp.method}</p>
+                                                    </td>
+                                                    <td className="py-4">
+                                                        <span className="text-xs px-2 py-1 rounded-md bg-gray-100 text-gray-600">
+                                                            {exp.category}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-4 text-sm text-gray-600">
+                                                        {exp.dueDate ? `Ziua ${exp.dueDate}` : '-'}
+                                                    </td>
+                                                    <td className="py-4 text-right font-semibold text-gray-800">{formatMoney(exp.amount)}</td>
+                                                    <td className="py-4 text-center">
+                                                        <button onClick={() => deleteExpense(exp.id)} className="text-red-400 hover:text-red-600 transition-colors">
+                                                            <i className="fa-regular fa-trash-can"></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // --- New Savings View (EUR) ---
+            const SavingsView = () => (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 sticky top-6">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4">Adaugă Economii (EUR)</h3>
+                            <form onSubmit={addSavings} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Data Depunerii</label>
+                                    <input required name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Sumă (EUR)</label>
+                                    <input required name="amount" type="number" min="0.01" step="0.01" placeholder="0.00" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Notă / Sursă</label>
+                                    <input name="note" type="text" placeholder="ex: Economii Iulie" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                                </div>
+                                <button type="submit" className="w-full bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2.5 rounded-lg transition-colors duration-200 mt-4">
+                                    <i className="fa-solid fa-plus mr-2"></i> Adaugă la Bilanț
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4 flex justify-between items-center">
+                                Evoluție Economii
+                                <span className="bg-sky-100 text-sky-700 py-1 px-3 rounded-full text-lg font-bold">{formatEuro(totalSavingsEur)}</span>
+                            </h3>
+                            <div className="h-64 relative w-full mb-6">
+                                <ChartComponent 
+                                    type="line" 
+                                    data={getSavingsTimelineData()} 
+                                    options={{ 
+                                        plugins: { legend: { display: false } },
+                                        scales: { y: { beginAtZero: true } }
+                                    }} 
+                                />
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4">Istoric Depuneri</h3>
+                            {savingsEntries.length === 0 ? (
+                                <div className="text-center py-10 text-gray-500">Nu ai adăugat economii în Euro încă.</div>
+                            ) : (
+                                <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-gray-200 text-gray-500 text-sm sticky top-0 bg-white">
+                                                <th className="pb-3 font-medium">Dată</th>
+                                                <th className="pb-3 font-medium">Notă</th>
+                                                <th className="pb-3 font-medium text-right">Sumă</th>
+                                                <th className="pb-3 font-medium text-center">Acțiune</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[...savingsEntries].sort((a,b) => new Date(b.date) - new Date(a.date)).map(entry => (
+                                                <tr key={entry.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                                                    <td className="py-3 text-sm text-gray-600">{new Date(entry.date).toLocaleDateString('ro-RO')}</td>
+                                                    <td className="py-3 font-medium text-gray-800">{entry.note || '-'}</td>
+                                                    <td className="py-3 text-right font-semibold text-sky-600">+{formatEuro(entry.amount)}</td>
+                                                    <td className="py-3 text-center">
+                                                        <button onClick={() => deleteSavings(entry.id)} className="text-red-400 hover:text-red-600 transition-colors">
+                                                            <i className="fa-regular fa-trash-can"></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // --- New Investments View (XTB - EUR) ---
+            const InvestmentsView = () => (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                    <div className="lg:col-span-1">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 sticky top-6">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4">Adaugă Investiție XTB (EUR)</h3>
+                            <form onSubmit={addInvestment} className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Dată Achiziție</label>
+                                    <input required name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Tip Instrument</label>
+                                    <select name="type" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                                        <option value="ETF">ETF</option>
+                                        <option value="Acțiuni">Acțiuni (Stocks)</option>
+                                        <option value="Obligațiuni">Obligațiuni (Bonds)</option>
+                                        <option value="Crypto">Crypto</option>
+                                        <option value="Altele">Altele</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Simbol / Nume</label>
+                                    <input required name="name" type="text" placeholder="ex: SXR8.DE sau Apple" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Sumă Investită (EUR)</label>
+                                    <input required name="amount" type="number" min="0.01" step="0.01" placeholder="0.00" className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                                </div>
+                                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-lg transition-colors duration-200 mt-4">
+                                    <i className="fa-solid fa-chart-line mr-2"></i> Adaugă Investiție
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    <div className="lg:col-span-2 space-y-6">
+                        {/* Charts Row */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                                <h3 className="text-lg font-bold text-gray-800 mb-2">Total Portofoliu</h3>
+                                <div className="text-3xl font-bold text-indigo-700 mb-4">{formatEuro(totalInvestmentsEur)}</div>
+                                <div className="h-48 relative w-full">
+                                    <ChartComponent 
+                                        type="doughnut" 
+                                        data={getInvestmentTypeData()} 
+                                        options={{ plugins: { legend: { position: 'right' } }, cutout: '65%' }} 
+                                    />
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                                <h3 className="text-lg font-bold text-gray-800 mb-4">Evoluție Achiziții</h3>
+                                <div className="h-48 relative w-full">
+                                    <ChartComponent 
+                                        type="line" 
+                                        data={getInvestmentTimelineData()} 
+                                        options={{ 
+                                            plugins: { legend: { display: false } },
+                                            scales: { y: { beginAtZero: true, display: false } }
+                                        }} 
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Table */}
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-4">Istoric Tranzacții XTB</h3>
+                            {investmentEntries.length === 0 ? (
+                                <div className="text-center py-10 text-gray-500">Nu ai adăugat nicio investiție.</div>
+                            ) : (
+                                <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-gray-200 text-gray-500 text-sm sticky top-0 bg-white">
+                                                <th className="pb-3 font-medium">Dată</th>
+                                                <th className="pb-3 font-medium">Tip</th>
+                                                <th className="pb-3 font-medium">Simbol</th>
+                                                <th className="pb-3 font-medium text-right">Sumă</th>
+                                                <th className="pb-3 font-medium text-center">Acțiune</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[...investmentEntries].sort((a,b) => new Date(b.date) - new Date(a.date)).map(entry => (
+                                                <tr key={entry.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                                                    <td className="py-3 text-sm text-gray-600">{new Date(entry.date).toLocaleDateString('ro-RO')}</td>
+                                                    <td className="py-3">
+                                                        <span className="text-xs px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 font-medium">
+                                                            {entry.type}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-3 font-bold text-gray-800">{entry.name}</td>
+                                                    <td className="py-3 text-right font-semibold text-gray-800">{formatEuro(entry.amount)}</td>
+                                                    <td className="py-3 text-center">
+                                                        <button onClick={() => deleteInvestment(entry.id)} className="text-red-400 hover:text-red-600 transition-colors">
+                                                            <i className="fa-regular fa-trash-can"></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // --- Settings View ---
+            const SettingsView = () => {
+                const handleExport = () => {
+                    const data = { incomes, expenses, savingsGoal, savingsEntries, investmentEntries };
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `budget_backup_${new Date().toISOString().split('T')[0]}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    showNotification('Date exportate cu succes!');
+                };
+
+                const handleImport = (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            const data = JSON.parse(event.target.result);
+                            if (data.incomes) setIncomes(data.incomes);
+                            if (data.expenses) setExpenses(data.expenses);
+                            if (data.savingsGoal) setSavingsGoal(data.savingsGoal);
+                            if (data.savingsEntries) setSavingsEntries(data.savingsEntries);
+                            if (data.investmentEntries) setInvestmentEntries(data.investmentEntries);
+                            showNotification('Date importate cu succes!');
+                        } catch (err) {
+                            showNotification('Format de fișier invalid!', 'error');
+                        }
+                    };
+                    reader.readAsText(file);
+                    e.target.value = ''; // Reset input
+                };
+
+                const handleClearData = () => {
+                    setIncomes([]);
+                    setExpenses([]);
+                    setSavingsEntries([]);
+                    setInvestmentEntries([]);
+                    setSavingsGoal(2000);
+                    setShowClearConfirm(false);
+                    showNotification('Toate datele au fost șterse!');
+                };
+
+                return (
+                    <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                            <h3 className="text-lg font-bold text-gray-800 mb-2">Management Date</h3>
+                            <p className="text-sm text-gray-500 mb-6">Exportă datele pentru a le salva sau importă-le pe un alt dispozitiv.</p>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <button onClick={handleExport} className="flex items-center justify-center p-4 border-2 border-turquoise-100 rounded-xl hover:bg-turquoise-50 text-turquoise-700 font-semibold transition-colors">
+                                    <i className="fa-solid fa-download mr-3 text-xl"></i> Exportă Backup (JSON)
+                                </button>
+                                
+                                <label className="flex items-center justify-center p-4 border-2 border-turquoise-100 rounded-xl hover:bg-turquoise-50 text-turquoise-700 font-semibold transition-colors cursor-pointer">
+                                    <i className="fa-solid fa-upload mr-3 text-xl"></i> Importă Backup
+                                    <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+                                </label>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-red-100">
+                            <h3 className="text-lg font-bold text-red-600 mb-2">Zonă Periculoasă</h3>
+                            <p className="text-sm text-gray-500 mb-4">Șterge definitiv toate datele, economiile și investițiile de pe acest dispozitiv.</p>
+                            
+                            {!showClearConfirm ? (
+                                <button onClick={() => setShowClearConfirm(true)} className="bg-red-50 text-red-600 hover:bg-red-100 font-semibold py-2 px-6 rounded-lg transition-colors">
+                                    Șterge Toate Datele
+                                </button>
+                            ) : (
+                                <div className="bg-red-50 p-4 rounded-xl border border-red-200">
+                                    <p className="text-red-700 font-medium mb-3">Ești absolut sigur? Acțiunea nu poate fi anulată fără un backup.</p>
+                                    <div className="flex gap-3">
+                                        <button onClick={handleClearData} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors">
+                                            Da, Șterge Tot
+                                        </button>
+                                        <button onClick={() => setShowClearConfirm(false)} className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 font-semibold py-2 px-6 rounded-lg transition-colors">
+                                            Anulează
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            // --- Layout ---
+            return (
+                <div className="min-h-screen pb-12 relative">
+                    {/* Toast Notification */}
+                    {toast && (
+                        <div className={`fixed bottom-6 right-6 px-6 py-3 rounded-xl shadow-lg font-medium text-white z-50 transition-opacity ${toast.type === 'error' ? 'bg-red-500' : 'bg-gray-800'}`}>
+                            <i className={`fa-solid ${toast.type === 'error' ? 'fa-triangle-exclamation' : 'fa-circle-check'} mr-2`}></i>
+                            {toast.message}
+                        </div>
+                    )}
+
+                    {/* Header */}
+                    <header className="bg-turquoise-600 text-white shadow-md sticky top-0 z-10">
+                        <div className="max-w-6xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-white/20 p-2 rounded-lg">
+                                    <i className="fa-solid fa-wallet text-xl"></i>
+                                </div>
+                                <h1 className="text-xl font-bold tracking-tight">Family Budget Planner</h1>
+                            </div>
+                            <div className="hidden sm:block text-sm bg-white/10 px-3 py-1.5 rounded-full font-medium">
+                                <i className="fa-solid fa-earth-europe mr-1"></i> Multi-Currency (RON/EUR)
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+                        {/* Navigation Tabs - Added flex-wrap for mobile responsiveness */}
+                        <div className="flex flex-wrap gap-2 bg-white p-1 rounded-xl shadow-sm w-full mb-8 border border-gray-100">
+                            <button 
+                                onClick={() => setActiveTab('dashboard')}
+                                className={`flex-auto px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-turquoise-50 text-turquoise-700 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <i className="fa-solid fa-chart-pie mr-2"></i> Bilanț Lunar
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('incomes')}
+                                className={`flex-auto px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'incomes' ? 'bg-turquoise-50 text-turquoise-700 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <i className="fa-solid fa-arrow-down mr-2"></i> Venituri
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('expenses')}
+                                className={`flex-auto px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'expenses' ? 'bg-turquoise-50 text-turquoise-700 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <i className="fa-solid fa-arrow-up mr-2"></i> Cheltuieli
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('savings')}
+                                className={`flex-auto px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'savings' ? 'bg-sky-50 text-sky-700 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <i className="fa-solid fa-piggy-bank mr-2"></i> Economii (EUR)
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('investments')}
+                                className={`flex-auto px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'investments' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <i className="fa-solid fa-chart-line mr-2"></i> Investiții XTB
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('settings')}
+                                className={`flex-auto px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'settings' ? 'bg-gray-100 text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <i className="fa-solid fa-gear mr-2"></i> Setări
+                            </button>
+                        </div>
+
+                        {/* Dynamic Content */}
+                        {activeTab === 'dashboard' && <DashboardView />}
+                        {activeTab === 'incomes' && <IncomeView />}
+                        {activeTab === 'expenses' && <ExpenseView />}
+                        {activeTab === 'savings' && <SavingsView />}
+                        {activeTab === 'investments' && <InvestmentsView />}
+                        {activeTab === 'settings' && <SettingsView />}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
